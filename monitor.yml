@@ -1,0 +1,53 @@
+name: Ticket monitor
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # every 15 minutes (GitHub may delay it a bit)
+  workflow_dispatch:
+    inputs:
+      force_digest:
+        description: "Send a digest right now"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # lets the job save its encrypted state file
+
+concurrency:
+  group: ticket-monitor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Run monitor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
+          STATE_PASSPHRASE: ${{ secrets.STATE_PASSPHRASE }}
+          WATCHLIST: ${{ secrets.WATCHLIST }}
+          MY_CITIES: ${{ secrets.MY_CITIES }}
+          TIMEZONE: ${{ secrets.TIMEZONE }}
+          FORCE_DIGEST: ${{ inputs.force_digest }}
+        run: python monitor.py
+
+      - name: Save state
+        run: |
+          git config user.name "ticket-monitor"
+          git config user.email "ticket-monitor@users.noreply.github.com"
+          if [ -f state.enc ]; then git add state.enc; fi
+          git diff --cached --quiet || (git commit -m "Update state" && git push)
