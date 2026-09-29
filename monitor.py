@@ -24,6 +24,7 @@ import os
 import re
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -270,12 +271,22 @@ def classify(emails):
     for i in range(0, len(emails), CHUNK_SIZE):
         chunk = emails[i : i + CHUNK_SIZE]
         payload = [{k: e[k] for k in ("id", "from", "subject", "date", "body")} for e in chunk]
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=4000,
-            system=prompt,
-            messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
-        )
+        resp = None
+        for attempt in range(4):
+            try:
+                resp = client.messages.create(
+                    model=MODEL,
+                    max_tokens=4000,
+                    system=prompt,
+                    messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+                )
+                break
+            except anthropic.APIConnectionError as e:
+                if attempt == 3:
+                    raise
+                wait = 2 ** attempt
+                print(f"Claude connection error (attempt {attempt + 1}/4): {e}. Retrying in {wait}s...")
+                time.sleep(wait)
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
         text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
         try:
@@ -580,6 +591,7 @@ def run(state):
 def notify_error(state, e):
     msg = scrub(str(e))
     print("ERROR:", type(e).__name__, msg[:200])
+    print(scrub(traceback.format_exc()))  # full detail in the run log only, never sent to Telegram
     low = msg.lower()
     if "invalid_grant" in low or type(e).__name__ == "RefreshError" or "expired or revoked" in low:
         hint = "Your Google login expired (this happens every 7 days).\n" + RELOGIN_STEPS
